@@ -8,7 +8,7 @@ from diffusers import (
 from neurons.safety import StableDiffusionSafetyChecker
 from transformers import CLIPImageProcessor
 from utils import colored_log, warm_up
-
+from functools import lru_cache
 
 class StableMiner(BaseMiner):
     def __init__(self):
@@ -63,7 +63,18 @@ class StableMiner(BaseMiner):
             "text_to_image": {"args": self.t2i_args, "model": self.t2i_model},
             "image_to_image": {"args": self.i2i_args, "model": self.i2i_model},
         }
-
+        
+    @lru_cache(maxsize=100)
+    def cached_generate_image(self, prompt, width, height, seed):
+        # Ta funkcja będzie cachować wyniki dla powtarzających się promptów
+        generator = torch.Generator(device=self.config.miner.device).manual_seed(seed)
+        return self.t2i_model(
+            prompt=prompt,
+            width=width,
+            height=height,
+            generator=generator
+        ).images[0]
+        
     def optimize_models(self):
         if self.config.miner.optimize:
             self.t2i_model.unet = torch.compile(
