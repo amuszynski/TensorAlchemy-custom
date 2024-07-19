@@ -34,6 +34,11 @@ class StableMiner(BaseMiner):
             use_safetensors=True,
             variant="fp16",
         ).to(self.config.miner.device)
+
+        self.t2i_model = quantize_dynamic(
+            self.t2i_model, {torch.nn.Linear, torch.nn.Conv2d}, dtype=torch.qint8
+        )
+        
         self.t2i_model.set_progress_bar_config(disable=True)
         self.t2i_model.scheduler = DPMSolverMultistepScheduler.from_config(
             self.t2i_model.scheduler.config
