@@ -1,4 +1,5 @@
 import torch
+from torch.quantization import quantize_dynamic
 from base import BaseMiner
 from diffusers import (
     AutoPipelineForImage2Image,
@@ -9,10 +10,13 @@ from neurons.safety import StableDiffusionSafetyChecker
 from transformers import CLIPImageProcessor
 from utils import colored_log, warm_up
 from functools import lru_cache
+import bittensor as bt  # Dodane, aby użyć bt.Tensor
 
 class StableMiner(BaseMiner):
     def __init__(self):
         super().__init__()
+        self.request_count = 0
+        self.memory_clear_threshold = 10  # Czyść pamięć co 10 zapytań
 
         # Load the model
         self.load_models()
@@ -25,6 +29,9 @@ class StableMiner(BaseMiner):
 
         # Start the miner loop
         self.loop()
+
+    def clear_gpu_memory(self):
+        torch.cuda.empty_cache()
 
     def load_models(self):
         # Load the text-to-image model
@@ -66,7 +73,6 @@ class StableMiner(BaseMiner):
         
     @lru_cache(maxsize=100)
     def cached_generate_image(self, prompt, width, height, seed):
-        # Ta funkcja będzie cachować wyniki dla powtarzających się promptów
         generator = torch.Generator(device=self.config.miner.device).manual_seed(seed)
         return self.t2i_model(
             prompt=prompt,
@@ -81,10 +87,37 @@ class StableMiner(BaseMiner):
                 self.t2i_model.unet, mode="reduce-overhead", fullgraph=True
             )
 
-            # Warm up model
             colored_log(
                 ">>> Warming up model with compile... "
                 + "this takes roughly two minutes...",
                 color="yellow",
             )
             warm_up(self.t2i_model, self.t2i_args)
+
+    async def generate_image(self, synapse: ImageGeneration) -> ImageGeneration:
+        try:
+            if synapse.generation_type == "text_to_image":
+                seed = synapse.seed if synapse.seed != -1 else self.config.miner.seed
+                image = self.cached_generate_image(
+                    synapse.prompt, synapse.width, synapse.height, seed
+                )
+                synapse.images = [bt.Tensor.serialize(self.transform(image))]
+            else:
+                # Istniejąca logika dla image_to_image
+                model = self.mapping[synapse.generation_type]["model"]
+                args = self.mapping[synapse.generation_type]["args"].copy()
+                args.update({
+                    "prompt": synapse.prompt,
+                    "image": synapse.image,
+                    "strength": synapse.strength,
+                    "guidance_scale": synapse.guidance_scale,
+                })
+                images = model(**args).images
+                synapse.images = [bt.Tensor.serialize(self.transform(image)) for image in images]
+        finally:
+            self.request_count += 1
+            if self.request_count >= self.memory_clear_threshold:
+                self.clear_gpu_memory()
+                self.request_count = 0
+        
+        return synapse
