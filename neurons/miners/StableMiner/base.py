@@ -261,10 +261,21 @@ class BaseMiner(ABC):
         return synapse
 
     async def generate_image(self, synapse: ImageGeneration) -> ImageGeneration:
-        """
+    """
         Image generation logic shared between both text-to-image and image-to-image
         """
 
+    if synapse.generation_type == "text_to_image":
+        seed = synapse.seed if synapse.seed != -1 else self.config.miner.seed
+        image = self.cached_generate_image(
+            synapse.prompt, synapse.width, synapse.height, seed
+        )
+        synapse.images = [bt.Tensor.serialize(self.transform(image))]
+    else:
+        # Istniejąca logika dla image_to_image
+        # ...
+
+    # ... (reszta kodu)
         # Misc
         timeout = synapse.timeout
         self.stats.total_requests += 1
